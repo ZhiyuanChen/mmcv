@@ -19,53 +19,42 @@ class EpochBasedRunner(BaseRunner):
 
     def run_iter(self, data_batch, **kwargs):
         if self.batch_processor is not None:
+            method = 'batch_processor'
             outputs = self.batch_processor(
                 self.model, data_batch, train_mode=self.train_mode, **kwargs)
         elif self.train_mode:
+            method = 'self.model.train_step'
             outputs = self.model.train_step(data_batch, self.optimizer,
                                             **kwargs)
         else:
+            method = 'self.model.val_step'
             outputs = self.model.val_step(data_batch, self.optimizer, **kwargs)
         if not isinstance(outputs, dict):
-            raise TypeError('"batch_processor()" or "model.train_step()"'
-                            'and "model.val_step()" must return a dict')
+            raise TypeError(f'"{method}" must return a dict, '
+                            f'but got {type(outputs)}')
         if 'log_vars' in outputs:
             self.log_buffer.update(outputs['log_vars'], outputs['num_samples'])
         self.outputs = outputs
 
-    def train(self, data_loader, **kwargs):
-        self.model.train()
-        self.mode = 'train'
-        self.train_model = True
+    def run_epoch(self, data_loader, **kwargs):
+        self.model.train() if self.train_mode else self.model.eval()
         self.data_loader = data_loader
         self._max_iters = self._max_epochs * len(self.data_loader)
-        self.call_hook('before_train_epoch')
+        self.call_hook(f'before_{self.mode}_epoch')
         time.sleep(2)  # Prevent possible deadlock during epoch transition
         for i, data_batch in enumerate(self.data_loader):
             self._inner_iter = i
-            self.call_hook('before_train_iter')
-            self.run_iter()
-            self.call_hook('after_train_iter')
+            self.call_hook(f'before_{self.mode}_iter')
+            if self.train_mode:
+                self.run_iter(data_batch)
+            else:
+                with torch.no_grad():
+                    self.run_iter(data_batch)
+            self.call_hook(f'after_{self.mode}_iter')
             self._iter += 1
 
-        self.call_hook('after_train_epoch')
+        self.call_hook(f'after_{self.mode}_epoch')
         self._epoch += 1
-
-    def val(self, data_loader, **kwargs):
-        self.model.eval()
-        self.mode = 'val'
-        self.train_model = False
-        self.data_loader = data_loader
-        self.call_hook('before_val_epoch')
-        time.sleep(2)  # Prevent possible deadlock during epoch transition
-        for i, data_batch in enumerate(self.data_loader):
-            self._inner_iter = i
-            self.call_hook('before_val_iter')
-            with torch.no_grad():
-                self.run_iter()
-            self.call_hook('after_val_iter')
-
-        self.call_hook('after_val_epoch')
 
     def run(self, data_loaders, workflow, max_epochs, **kwargs):
         """Start running.
@@ -84,12 +73,6 @@ class EpochBasedRunner(BaseRunner):
         assert len(data_loaders) == len(workflow)
 
         self._max_epochs = max_epochs
-        for i, flow in enumerate(workflow):
-            mode, epochs = flow
-            if mode == 'train':
-                self._max_iters = self._max_epochs * len(data_loaders[i])
-                break
-
         work_dir = self.work_dir if self.work_dir is not None else 'NONE'
         self.logger.info('Start running, host: %s, work_dir: %s',
                          get_host_info(), work_dir)
@@ -105,16 +88,17 @@ class EpochBasedRunner(BaseRunner):
                         raise ValueError(
                             f'runner has no method named "{mode}" to run an '
                             'epoch')
-                    epoch_runner = getattr(self, mode)
+                    self.mode = mode
+                    self.train_mode = True if self.mode == 'train' else False
                 else:
                     raise TypeError(
                         'mode in workflow must be a str, but got {}'.format(
                             type(mode)))
 
                 for _ in range(epochs):
-                    if mode == 'train' and self.epoch >= self._max_epochs:
+                    if self.train_mode and self.epoch >= self._max_epochs:
                         break
-                    epoch_runner(data_loaders[i], **kwargs)
+                    self.run_epoch(data_loaders[i], **kwargs)
 
         time.sleep(1)  # wait for some hooks like loggers to finish
         self.call_hook('after_run')

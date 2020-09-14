@@ -178,11 +178,7 @@ class BaseRunner(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def train(self):
-        pass
-
-    @abstractmethod
-    def val(self):
+    def run_epoch(self):
         pass
 
     @abstractmethod
