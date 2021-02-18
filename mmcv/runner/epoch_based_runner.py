@@ -92,12 +92,6 @@ class EpochBasedRunner(BaseRunner):
         assert self._max_epochs is not None, (
             'max_epochs must be specified during instantiation')
 
-        for i, flow in enumerate(workflow):
-            mode, epochs = flow
-            if mode == 'train':
-                self._max_iters = self._max_epochs * len(data_loaders[i])
-                break
-
         work_dir = self.work_dir if self.work_dir is not None else 'NONE'
         self.logger.info('Start running, host: %s, work_dir: %s',
                          get_host_info(), work_dir)
